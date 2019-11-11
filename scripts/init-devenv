@@ -1,0 +1,108 @@
+#!/bin/bash
+
+####################################################################################################
+# Initializes a local development environment
+#
+# Optional arguments:
+#  -i, --interactive    exec an interactive python environment
+
+no_popd=
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -i|--interactive)
+                interactive=1
+                shift
+                ;;
+            *)
+                error_exit "Unrecognized argument. Usage: init-devenv [ -i | --interactive ]"
+                ;;
+        esac
+    done
+
+    cd .. || {
+        error_exit "Failed to cd to root directory"
+    }
+
+    if [[ ! -d ".venv" ]]; then
+        echo "Upgrading pip..."
+        python3 -m pip install --upgrade pip || {
+            error_exit "Failed to upgrade pip"
+        }
+        echo
+
+        echo "Creating python virtual environment..."
+        virtualenv -p python3 .venv || {
+            error_exit "Failed to create python virtual environment"
+        }
+        echo
+
+        cat << EOF >> .venv/Scripts/activate
+
+pushd "$scriptdir" > /dev/null && {
+    python3 -m pip install -r requirements.txt --no-warn-script-location --no-cache-dir --upgrade --upgrade-strategy eager
+    popd > /dev/null
+}
+EOF
+
+        echo "Initializing git repository in python virtual environment directory..."
+        echo "*" > .venv/.gitignore || {
+            error_exit "Failed to write virtual environment .gitignore file"
+        }
+        git init .venv || {
+            error_exit "Failed to initialize virtual environment git repository"
+        }
+        echo
+    fi
+
+    if [[ -z "$VIRTUAL_ENV" ]]; then
+        echo "Activating python virtual environment..."
+        source .venv/Scripts/activate || {
+            error_exit "Failed to activate python virtual environment"
+        }
+        echo
+    fi
+
+    if [[ -n "$interactive" ]]; then
+        popd > /dev/null || {
+            no_popd=1
+            error_exit "Failed to popd the current directory"
+        }
+
+        echo 'Starting interactive bash, quit with "exit" ...'
+        exec bash --rcfile "$scriptdir/utils/init-python.bashrc" -i
+    fi
+}
+
+error_exit() {
+    echo "$1" >&2
+    echo
+    [[ -z "$no_popd" ]] && popd > /dev/null 2>&1
+    exit 1
+}
+
+if [[ -n "$INSIDE_INIT_PYTHON" ]]; then
+    no_popd=1
+    echo
+    error_exit 'Already running inside an invocation of `init-python --interactive`'
+fi
+
+which python3 > /dev/null 2>&1 || {
+    no_popd=1
+    error_exit $'"python3" not found in PATH.\n\nOn Windows, copy the installed Python3 "python.exe" to "python3.exe"'
+}
+
+pushd . > /dev/null || {
+    no_popd=1
+    error_exit "Failed to pushd the current directory"
+}
+
+scriptdir=$(dirname "$(readlink -f "$0")")
+cd "$scriptdir" || {
+    error_exit "Failed to cd to scripts directory."
+}
+
+set -m
+trap "" SIGINT
+main "$@"
+exit 0
