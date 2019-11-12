@@ -1,0 +1,95 @@
+#!/bin/bash
+
+####################################################################################################
+# Run some end-to-end tests
+
+main() {
+    git clean -fx -- output > /dev/null || error_exit "Failed to clean output directory"
+
+    if [[ -z "$INSIDE_INIT_PYTHON" ]]; then
+        ../scripts/init-devenv || error_exit "Failed to init python environment"
+        if [[ -z "$VIRTUAL_ENV" ]]; then
+            echo "Activating python virtual environment..."
+            source .venv/Scripts/activate || {
+                error_exit "Failed to activate python virtual environment"
+            }
+            echo
+        fi
+    fi
+
+    ################################################################################################
+    # Test failure cases
+    test_intersect_failure "9_9_25_cylinder" "25_25_25_cylinder"
+    test_intersect_failure "25_25_25_cylinder" "9_9_25_cylinder"
+    test_intersect_failure "9_9_25_cylinder" "25_25_25_dome"
+    test_intersect_failure "25_25_25_dome" "9_9_25_cylinder"
+    python test_json_equal.py \
+        "expected/9_9_25_cylinder_identity.schematic.json" \
+        "expected/25_25_25_cylinder_dome.schematic.json" 2> /dev/null && {
+        error_exit "json equality check returned false positive."
+    }
+
+    ################################################################################################
+    # Test identity cases
+    test_intersect "9_9_25_cylinder" "9_9_25_cylinder" "9_9_25_cylinder_identity"
+    test_intersect "25_25_25_cylinder" "25_25_25_cylinder" "25_25_25_cylinder_identity"
+    test_intersect "25_25_25_dome" "25_25_25_dome" "25_25_25_dome_identity"
+
+    ################################################################################################
+    # Test valid intersections
+    test_intersect "25_25_25_cylinder" "25_25_25_dome" "25_25_25_cylinder_dome"
+    test_intersect "25_25_25_dome" "25_25_25_cylinder" "25_25_25_dome_cylinder"
+}
+
+test_intersect_failure() {
+    input_a="input/$1.schematic"
+    input_b="input/$2.schematic"
+    output="output/failure.schematic"
+
+    [[ -f "$output" ]] && error_exit "Output $output shouldn't exist."
+    python ../SchematicIntersect.py "$input_a" "$input_b" "$output" 2> /dev/null && {
+        error_exit "Intersection should have failed."
+    }
+    [[ -f "$output" ]] && error_exit "Output $output shouldn't exist."
+}
+
+test_intersect() {
+    input_a="input/$1.schematic"
+    input_b="input/$2.schematic"
+    output="output/$3.schematic"
+    output_json="$output.json"
+    expected_json="expected/$3.schematic.json"
+
+    [[ -f "$output" ]] && error_exit "Output $output already exists."
+    [[ -f "$expected_json" ]] || error_exit "Expected output $expected_json doesn't exist."
+    python ../SchematicIntersect.py "$input_a" "$input_b" "$output" || {
+        error_exit "Intersection failed."
+    }
+    [[ -f "$output" ]] || error_exit "Output $output doesn't exist."
+
+    ../nbt2json/nbt2json.exe --java --in "$output" --out "$output_json" || {
+        error_exit "Failed to convert $output to $output_json"
+    }
+
+    python test_json_equal.py "$output_json" "$expected_json" || {
+        error_exit "$output_json does not match $expected_json"
+    }
+    rm -f "$output" "$output_json"
+}
+
+error_exit() {
+    echo "$1" >&2
+    echo
+    exit 1
+}
+
+scriptdir=$(dirname "$(readlink -f "$0")")
+cd "$scriptdir" || {
+    error_exit "Failed to cd to scripts directory."
+}
+
+set -m
+trap "" SIGINT
+main "$@"
+echo "Tests passed!"
+exit 0
